@@ -2492,10 +2492,14 @@ static void dump_guest(vm_t *vm, seL4_Word addr)
 #define PTE_R           BIT(1)
 #define PTE_W           BIT(2)
 #define PTE_X           BIT(3)
+#define PTE_GET_256T(x) (((x >> 46) & 0xff))
+#define PTE_GET_512G(x) (((x >> 37) & 0x1ffff))
 #define PTE_GET_1G(x)   (((x >> 28) & 0x3ffffff))
 #define PTE_GET_2M(x)   (((x >> 19) & (BIT(36) - 1)))
 #define PTE_GET_4K(x)   (((x >> 10) & (BIT(45) - 1)))
 #define SV39_MODE       0x8
+#define SV48_MODE       0x9
+#define SV57_MODE       0xa
 
 
 //#define DEBUG_PW
@@ -2508,10 +2512,10 @@ static void dump_guest(vm_t *vm, seL4_Word addr)
 
 static uint64_t pt[CONFIG_MAX_NUM_NODES][512];
 
-/* translate guest va to guest pa Sv39 */
+/* translate guest va to guest pa Sv57 */
 static seL4_Word gva_to_gpa(vm_t *vm, seL4_Word va, int vcpu_id)
 {
-    int level = 2;
+    int level = 4;
     assert(vcpu_id >=0 && vcpu_id < CONFIG_MAX_NUM_NODES);
     uint64_t *ppt = &pt[vcpu_id][0];
     bzero(ppt, 4096);
@@ -2521,7 +2525,7 @@ static seL4_Word gva_to_gpa(vm_t *vm, seL4_Word va, int vcpu_id)
     assert(!res.error);
     satp = res.value;
     DPW("satp %lx\n", satp);
-    assert((satp >> 60) == SV39_MODE);
+    assert((satp >> 60) == SV57_MODE);
     seL4_Word ppn = GET_PPN(satp);
     seL4_Word gpa = ppn << PPN_SHIFT;
     uint64_t pte = 0;
@@ -2543,6 +2547,16 @@ static seL4_Word gva_to_gpa(vm_t *vm, seL4_Word va, int vcpu_id)
         DPW("index %d pte %lx gpa %lx level %d\n", vpn, pte, gpa, level);
         if (pte & PTE_V && (pte & PTE_R || pte & PTE_X)) {
             /* we reach a leaf page */
+            if (level == 4) {
+                /* 256 TiB page */
+                DPW("pa %lx %lx level %d\n", PTE_GET_256T(pte), PTE_GET_256T(pte) << 48, level);
+                return (PTE_GET_256T(pte) << 48) | (va & 0xffffffffffff);
+            }
+            if (level == 3) {
+                /* 512 GiB page */
+                DPW("pa %lx %lx level %d\n", PTE_GET_512G(pte), PTE_GET_512G(pte) << 39, level);
+                return (PTE_GET_512G(pte) << 39) | (va & 0x7fffffffff);
+            }
             if (level == 2) { 
                 /* 1 GiB page */
                 DPW("pa  %lx %lx level %d\n", PTE_GET_1G(pte), PTE_GET_1G(pte) << 30, level);
